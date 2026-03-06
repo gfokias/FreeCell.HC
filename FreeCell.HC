@@ -27,6 +27,12 @@
 #define SHUFFLES 4
 #define GCDS 5
 
+#define CARD_WIDTH 48
+#define CARD_HEIGHT 64
+#define PADDING 32
+#define PADDING_X CARD_WIDTH + 64
+#define PADDING_Y CARD_HEIGHT/2
+
 U8 card_faces[DECK_SIZE];
 U8 card_suits[DECK_SIZE];
 
@@ -93,45 +99,74 @@ U0 Init()
 
 U0 DrawBackground(CDC *dc)
 {
-  static U64 i, max;
+  static U64 x, y, i, j, max;
 
-  DCFill(dc, GREEN);
-  
+  j = 0;
   max = dc->width_internal * dc->height;
 
-  for (i = 0; i < max; i += 2) {
-    dc->body[i] = DKGRAY;
+  for (i = 0; i <= max; i++) {
+    if (i % dc->width_internal == 0) {
+      j = (j + 1) % 2;
+    }
+
+    if (i % 2 == j) {
+      dc->body[i] = GREEN;
+    } else {
+      dc->body[i] = DKGRAY;
+    }
   }
-}
-
-U8 *CardText(U64 card)
-{ /* Single-thread only */
-  static U8 buffer[3];
-
-  buffer[0] = SUIT_CHAR[card_suits[card]];
-  buffer[1] = FACE_CHAR[card_faces[card]];
-  buffer[2] = 0;
-  
-  return buffer;
 }
 
 U0 DrawCards(CDC *dc)
 {
-  U64 i, j, card;
+  U8 buffer[3];
+  U64 i, j, x, y, card;
 
+  buffer[sizeof(buffer) - 1] = 0;
+  
   for (i = 0; i < NUM_CASCADES; i++) {
-    for (j = 0; j < CASCADE_LENGTH; j++) {
+    x = PADDING + PADDING_X * i;
+    y = PADDING - PADDING_Y;
+    
+    for (j = 0; j < CASCADE_LENGTH; j++) { 
       card = piles[i][j];
 
       if (card != -1) {
-	GrTextBox3(dc, i * 32, j * 32, 0, CardText(card));	
+	y += PADDING_Y;
+	
+	/* Card outline */
+	dc->color = BLACK;
+	GrLine(dc, x, y, x, y + CARD_HEIGHT);
+	GrLine(dc, x, y, x + CARD_WIDTH, y); 
+	GrLine(dc, x + CARD_WIDTH, y, x + CARD_WIDTH, y + CARD_HEIGHT);
+
+	dc->color = WHITE;
+	GrRect(dc, x + 1, y + 1, CARD_WIDTH - 1, CARD_HEIGHT - 1);
+	
+	switch (card_suits[card]) {
+	case SUIT_CLUB:
+	case SUIT_SPADE:
+	  dc->color = BLACK; break;
+	case SUIT_HEART:
+	case SUIT_DIAMOND:
+	  dc->color = RED; break;
+	}
+
+	buffer[0] = SUIT_CHAR[card_suits[card]];
+	buffer[1] = FACE_CHAR[card_faces[card]];
+
+	GrTextBox3(dc, x + 2, y + 2, 0, buffer);
       }
     }
+    
+    dc->color = BLACK;
+    GrLine(dc, x, y + CARD_HEIGHT, x + CARD_WIDTH, y + CARD_HEIGHT); 
   }
 }
 
 U0 DrawIt(CTask *task, CDC *dc)
 {
+  DrawBackground(dc);
   DrawCards(dc);
 }
 
