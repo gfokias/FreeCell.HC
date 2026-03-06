@@ -22,7 +22,8 @@
 #define DECK_SIZE NUM_SUITS * NUM_FACES
 
 #define NUM_CASCADES 8
-#define CASCADE_LENGTH 7
+#define CASCADE_LENGTH_INITIAL 7
+#define CASCADE_LENGTH NUM_FACES + 1 /* Last one is always -1 */ 
 
 #define SHUFFLES 4
 #define GCDS 5
@@ -33,8 +34,16 @@
 #define PADDING_X CARD_WIDTH + 64
 #define PADDING_Y CARD_HEIGHT/2
 
+#define MIN_CLICK_DISTANCE 0.1
+#define SLEEP_TIME 50
+
 U8 card_faces[DECK_SIZE];
 U8 card_suits[DECK_SIZE];
+
+static I64 NULL_CARD = -1; /* Needed for easy dereferences */
+
+CD2I64 sel_offset;
+I64 *sel_card = &NULL_CARD;
 
 /* Contains card index */
 I64 piles[NUM_CASCADES][CASCADE_LENGTH];
@@ -82,16 +91,18 @@ U0 Init()
   SemiRandomOrderU8(NUM_FACES, DECK_SIZE/NUM_FACES, card_faces); 
 
   card = 0;
+
+  MemSetI64(piles, -1, sizeof(piles)/sizeof(I64));
   
   for (i = 0; i < NUM_CASCADES/2; i++) {
-    for (j = 0; j < CASCADE_LENGTH - 1; j++) {
+    for (j = 0; j < CASCADE_LENGTH_INITIAL - 1; j++) {
       piles[i][j] = card++;
     }
     piles[i][CASCADE_LENGTH - 1] = -1;
   }
 
   for (i = NUM_CASCADES/2; i < NUM_CASCADES; i++) {
-    for (j = 0; j < CASCADE_LENGTH; j++) {
+    for (j = 0; j < CASCADE_LENGTH_INITIAL; j++) {
       piles[i][j] = card++;
     }
   }
@@ -117,13 +128,39 @@ U0 DrawBackground(CDC *dc)
   }
 }
 
+U0 DrawCard(CDC *dc, U64 x, U64 y, U64 card)
+{
+  static U8 buffer[3];
+ 
+  dc->color = BLACK;
+  GrLine(dc, x, y, x, y + CARD_HEIGHT);
+  GrLine(dc, x, y, x + CARD_WIDTH, y); 
+  GrLine(dc, x + CARD_WIDTH, y, x + CARD_WIDTH, y + CARD_HEIGHT);
+  GrLine(dc, x, y + CARD_HEIGHT, x + CARD_WIDTH, y + CARD_HEIGHT); 
+
+  dc->color = WHITE;
+  GrRect(dc, x + 1, y + 1, CARD_WIDTH - 1, CARD_HEIGHT - 1);
+	
+  switch (card_suits[card]) {
+  case SUIT_CLUB:
+  case SUIT_SPADE:
+    dc->color = BLACK; break;
+  case SUIT_HEART:
+  case SUIT_DIAMOND:
+    dc->color = RED; break;
+  }
+
+  buffer[0] = SUIT_CHAR[card_suits[card]];
+  buffer[1] = FACE_CHAR[card_faces[card]];
+  buffer[2] = '\0';
+  
+  GrTextBox3(dc, x + 2, y + 2, 0, buffer);
+}
+
 U0 DrawCards(CDC *dc)
 {
-  U8 buffer[3];
   U64 i, j, x, y, card;
-
-  buffer[sizeof(buffer) - 1] = 0;
-  
+ 
   for (i = 0; i < NUM_CASCADES; i++) {
     x = PADDING + PADDING_X * i;
     y = PADDING - PADDING_Y;
@@ -131,43 +168,53 @@ U0 DrawCards(CDC *dc)
     for (j = 0; j < CASCADE_LENGTH; j++) { 
       card = piles[i][j];
 
-      if (card != -1) {
+      if (card != -1 && card != *sel_card) {
 	y += PADDING_Y;
-	
-	/* Card outline */
-	dc->color = BLACK;
-	GrLine(dc, x, y, x, y + CARD_HEIGHT);
-	GrLine(dc, x, y, x + CARD_WIDTH, y); 
-	GrLine(dc, x + CARD_WIDTH, y, x + CARD_WIDTH, y + CARD_HEIGHT);
-
-	dc->color = WHITE;
-	GrRect(dc, x + 1, y + 1, CARD_WIDTH - 1, CARD_HEIGHT - 1);
-	
-	switch (card_suits[card]) {
-	case SUIT_CLUB:
-	case SUIT_SPADE:
-	  dc->color = BLACK; break;
-	case SUIT_HEART:
-	case SUIT_DIAMOND:
-	  dc->color = RED; break;
-	}
-
-	buffer[0] = SUIT_CHAR[card_suits[card]];
-	buffer[1] = FACE_CHAR[card_faces[card]];
-
-	GrTextBox3(dc, x + 2, y + 2, 0, buffer);
+	DrawCard(dc, x, y, card);
       }
-    }
-    
-    dc->color = BLACK;
-    GrLine(dc, x, y + CARD_HEIGHT, x + CARD_WIDTH, y + CARD_HEIGHT); 
+    }   
   }
+
+  if (sel_card == &NULL_CARD) return;
+  DrawCard(dc, ms.pos.x + sel_offset.x, ms.pos.y + sel_offset.y, *sel_card);
 }
 
 U0 DrawIt(CTask *task, CDC *dc)
 {
+  U8 *b;
   DrawBackground(dc);
   DrawCards(dc);
+  GrPrint(dc, 0, 0, "%d %d\n", *sel_card, ms.pos.x - PADDING - CARD_WIDTH);
+}
+
+U0 HandleHeld()
+{
+  U64 i, j;
+  static Bool last_lb = FALSE;
+  
+  if (ms.lb) {
+    if (sel_card != &NULL_CARD) return;
+    
+    for (i = 0; i < NUM_CASCADES; i++) {
+      if (ms.pos.x > PADDING + PADDING_X * i && ms.pos.x < PADDING + PADDING_X * i + CARD_WIDTH) {
+	for (j = 0; piles[i][j] != -1; j++);
+	j--;
+	
+	if (ms.pos.y < PADDING + PADDING_Y * j ||
+	    ms.pos.y > PADDING + PADDING_Y * j + CARD_HEIGHT) {
+	  return;
+	}
+	
+	sel_card = &piles[i][j];
+	sel_offset.x = PADDING + PADDING_X * i - ms.pos.x;
+	sel_offset.y = PADDING + PADDING_Y * j - ms.pos.y;
+	break;
+      }
+    }
+  } else {
+    if (sel_card == &NULL_CARD) return;
+    sel_card = &NULL_CARD;
+  }
 }
 
 Bool Loop()
@@ -175,13 +222,8 @@ Bool Loop()
   I64 ch;
 
   while (TRUE) {
-    GetKey(&ch);
-
-    switch (ch.u8[0]) {
-    case SC_ESC:
-      return;
-    }
-
+    HandleHeld;
+    Sleep(SLEEP_TIME);
   }
   
 }
@@ -191,7 +233,6 @@ U0 Klondike()
   SettingsPush;
 
   AutoComplete;
-  DocClear;
   DocCursor;
   WinBorder;
   WinMax;
