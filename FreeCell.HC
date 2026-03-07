@@ -25,16 +25,20 @@
 #define CASCADE_LENGTH_INITIAL 7
 #define CASCADE_LENGTH (NUM_FACES + 1) /* Last one is always -1 */ 
 
+#define NUM_CELLS 4
+#define NUM_FOUNDATIONS NUM_SUITS
+
 #define SHUFFLES 4
-#define GCDS 5
 
 #define CARD_WIDTH 48
 #define CARD_HEIGHT 64
-#define PADDING 76
-#define PADDING_X 64
-#define PADDING_Y (CARD_HEIGHT/2)
+#define CELL_PADDING 32
 
-#define MIN_CLICK_DISTANCE 0.1
+#define CARD_PADDING_X 76
+#define CARD_PADDING_Y 128
+#define CARD_DIST_X 64
+#define CARD_DIST_Y (CARD_HEIGHT/4)
+
 #define SLEEP_TIME 50
 
 U8 card_faces[DECK_SIZE];
@@ -43,16 +47,16 @@ U8 card_suits[DECK_SIZE];
 static I64 NULL_CARD = -1; /* Needed for easy dereferences */
 
 CD2I64 sel_offset;
+I64 moves;
 I64 *sel_card = &NULL_CARD;
 
-/* Contains card index */
-I64 piles[NUM_CASCADES][CASCADE_LENGTH];
+I64 piles[NUM_CASCADES][CASCADE_LENGTH]; /* Contains card indexes */
+I64 cells[NUM_CELLS];
+I64 foundations[NUM_FOUNDATIONS];
 
 static U8 SUIT_BLACK[NUM_SUITS] = { TRUE, FALSE, FALSE, TRUE };
 static U8 SUIT_CHAR[NUM_SUITS] = "CDHS";
 static U8 FACE_CHAR[NUM_FACES] = "A23456789XJQK";
-
-static U8 *message = "";
 
 U8 *SemiRandomOrderU8(U64 n, U8 times = 1, U8 *order = NULL)
 { /* n should be prime or 4. If gcd(I, n) == 1 then {K*I % n, K = 0,1,...} == {1,2,...,n} */
@@ -89,19 +93,22 @@ U8 *SemiRandomOrderU8(U64 n, U8 times = 1, U8 *order = NULL)
 U0 Init()
 {
   U64 i, j, card;
-  
-  SemiRandomOrderU8(NUM_SUITS, DECK_SIZE/NUM_SUITS, card_suits);
-  SemiRandomOrderU8(NUM_FACES, DECK_SIZE/NUM_FACES, card_faces); 
 
   card = 0;
-
-  MemSetI64(piles, -1, sizeof(piles)/sizeof(I64));
+  moves = 0;
+  
+  MemSetI64(piles, NULL_CARD, sizeof(piles)/sizeof(I64));
+  MemSetI64(cells, NULL_CARD, sizeof(cells)/sizeof(I64));
+  MemSetI64(foundations, NULL_CARD, sizeof(foundations)/sizeof(I64));
+  
+  SemiRandomOrderU8(NUM_SUITS, DECK_SIZE/NUM_SUITS, card_suits);
+  SemiRandomOrderU8(NUM_FACES, DECK_SIZE/NUM_FACES, card_faces);
   
   for (i = 0; i < NUM_CASCADES/2; i++) {
     for (j = 0; j < CASCADE_LENGTH_INITIAL - 1; j++) {
       piles[i][j] = card++;
     }
-    piles[i][CASCADE_LENGTH - 1] = -1;
+    piles[i][CASCADE_LENGTH - 1] = NULL_CARD;
   }
 
   for (i = NUM_CASCADES/2; i < NUM_CASCADES; i++) {
@@ -113,7 +120,7 @@ U0 Init()
 
 U0 DrawBackground(CDC *dc)
 {
-  static U64 x, y, i, j, max;
+  U64 x, y, i, j, max;
 
   j = 0;
   max = dc->width_internal * dc->height;
@@ -131,7 +138,7 @@ U0 DrawBackground(CDC *dc)
   }
 }
 
-U0 DrawCardOutline(CDC *dc, U64 x, U64 y)
+U0 DrawCardOutline(CDC *dc, I64 x, I64 y)
 {
   GrLine(dc, x, y, x, y + CARD_HEIGHT);
   GrLine(dc, x, y, x + CARD_WIDTH, y); 
@@ -139,13 +146,13 @@ U0 DrawCardOutline(CDC *dc, U64 x, U64 y)
   GrLine(dc, x, y + CARD_HEIGHT, x + CARD_WIDTH, y + CARD_HEIGHT);
 }
 
-U0 DrawCard(CDC *dc, U64 x, U64 y, U64 card)
+U0 DrawCard(CDC *dc, I64 x, I64 y, I64 card)
 {
-  static U8 buffer[3];
+  U8 buffer[3];
  
   dc->color = BLACK;
   DrawCardOutline(dc, x, y);
-
+  
   dc->color = WHITE;
   GrRect(dc, x + 1, y + 1, CARD_WIDTH - 1, CARD_HEIGHT - 1);
 
@@ -162,93 +169,198 @@ U0 DrawCard(CDC *dc, U64 x, U64 y, U64 card)
   GrTextBox3(dc, x + 2, y + 2, 0, buffer);
 }
 
-U0 DrawCards(CDC *dc)
+U0 DrawCascadeCards(CDC *dc)
 {
   U64 i, j, x, y, card;
  
   for (i = 0; i < NUM_CASCADES; i++) {
-    x = PADDING + PADDING_X * i;
-    y = PADDING - PADDING_Y;
+    x = CARD_PADDING_X + CARD_DIST_X * i;
+    y = CARD_PADDING_Y - CARD_DIST_Y;
     
     for (j = 0; j < CASCADE_LENGTH; j++) { 
       card = piles[i][j];
 
-      if (card != -1 && card != *sel_card) {
-	y += PADDING_Y;
+      if (card != NULL_CARD && card != *sel_card) {
+	y += CARD_DIST_Y;
 	DrawCard(dc, x, y, card);
       }
     }   
   }
+}
 
+U0 DrawSelectedCard(CDC *dc)
+{
   if (sel_card == &NULL_CARD) return;
   DrawCard(dc, ms.pos.x + sel_offset.x, ms.pos.y + sel_offset.y, *sel_card);
 }
 
-U0 DrawIt(CTask *task, CDC *dc)
+I64 DrawTopCardArray(CDC *dc, I64 x, I64 *card_array, I64 card_length)
 {
-  U8 *b;
-  DrawBackground(dc);
-  DrawCards(dc);
-  GrPrint(dc, 0, 0, "%s", message);
+  U64 i;
+
+  x -= CARD_DIST_X;
+  
+  for (i = 0; i < card_length; i++) {
+    x += CARD_DIST_X;
+
+    if (card_array[i] == NULL_CARD || *sel_card == card_array[i]) {
+      dc->color = LTGRAY;
+      DrawCardOutline(dc, x, CELL_PADDING);
+    } else {
+      DrawCard(dc, x, CELL_PADDING, card_array[i]);
+    }
+  }
+  
+  return x + CARD_DIST_X;
 }
 
-U0 GetHoveringCascade(I64 *cascade, I64 *last_card = NULL, I64 offset_x = 0, I64 offset_y = 0)
-{ /* Last card is set to -1 if not hovering over it */
-  static I64 i, j;
+U0 DrawCellsAndFoundations(CDC *dc)
+{
+  I64 x;
+  
+  x = DrawTopCardArray(dc, CELL_PADDING, cells, NUM_CELLS);
+  DrawTopCardArray(dc, CELL_PADDING + x, foundations, NUM_FOUNDATIONS);
+}
+
+U0 DrawIt(CTask *task, CDC *dc)
+{
+  DrawBackground(dc);
+  DrawCellsAndFoundations(dc);
+  DrawCascadeCards(dc);
+  DrawSelectedCard(dc);
+  
+  dc->color = WHITE;
+  GrPrint(dc, 16, 0, "Moves: %d\n", moves);
+}
+
+Bool CardBoundsX(I64 x, I64 offset_x = 0) {
+  return ms.pos.x + offset_x > x && ms.pos.x + offset_x < x + CARD_WIDTH; 
+}
+
+Bool CardBoundsY(I64 y, I64 offset_y = 0) {
+  return ms.pos.y + offset_y > y && ms.pos.y + offset_y < y + CARD_HEIGHT;
+}
+
+Bool GetHoveringCascade(I64 *cascade, I64 *last_card, I64 offset_x = 0, I64 offset_y = 0)
+{ /* last_card is set to NULL_CARD if not hovering over it */
+  I64 i, j;
 
   /* TODO: Use math instead of for loop if too slow */
   for (i = 0; i < NUM_CASCADES; i++) {
-    if (ms.pos.x + offset_x > PADDING + PADDING_X * i &&
-	ms.pos.x + offset_x < PADDING + PADDING_X * i + CARD_WIDTH) {
+    if (CardBoundsX(CARD_PADDING_X + CARD_DIST_X * i, offset_x)) {
       *cascade = i;
       
-      if (last_card == NULL) return;
+      for (j = 0; piles[i][j] != NULL_CARD; j++);
       
-      for (j = 0; piles[i][j] != -1; j++);
-      j--;
-
-      if (ms.pos.y + offset_y < PADDING + PADDING_Y * j ||
-	  ms.pos.y + offset_y > PADDING + PADDING_Y * j + CARD_HEIGHT) {
-	*last_card = -1;
-      } else {
-	*last_card = j;
+      if (j == 0) {
+	*last_card = NULL_CARD;
+	return FALSE;
       }
 
-      return;
+      j--;
+
+      if (CardBoundsY(CARD_PADDING_Y + CARD_DIST_Y * j, offset_y)) {
+	*last_card = j;
+
+	sel_offset.x = CARD_PADDING_X + CARD_DIST_X * i - ms.pos.x;
+	sel_offset.y = CARD_PADDING_Y + CARD_DIST_Y * j - ms.pos.y;
+	
+	return TRUE;
+      }
+      
+      *last_card = NULL_CARD;
+      return FALSE;
     }
   }
+
+  *cascade = -1;
+  return FALSE;
+}
+
+Bool GetHoveringCell(I64 *cell)
+{
+  I64 i, x;
+
+  if (!CardBoundsY(CELL_PADDING)) {
+    return FALSE;
+  }
+  
+  x = CELL_PADDING - CARD_DIST_X;
+  
+  for (i = 0; i < NUM_CELLS; i++) {
+    x += CARD_DIST_X;
+
+    if (CardBoundsX(x)) {
+      *cell = i;
+
+      sel_offset.x = CELL_PADDING + CARD_DIST_X * i - ms.pos.x;
+      sel_offset.y = CELL_PADDING - ms.pos.y;
+
+      return TRUE;
+    }
+  }
+
+  return FALSE;
 }
 
 U0 TrySelectCard()
 {
-  static I64 i, j;
+  I64 i, j;
 
-  GetHoveringCascade(&i, &j);
-
-  if (i == -1 || j == -1) return;
-  
-  sel_card = &piles[i][j];
-  sel_offset.x = PADDING + PADDING_X * i - ms.pos.x;
-  sel_offset.y = PADDING + PADDING_Y * j - ms.pos.y;
+  if (GetHoveringCascade(&i, &j)) {
+    sel_card = &piles[i][j];
+  } else if (GetHoveringCell(&i)) {
+    sel_card = &cells[i];
+  }
 }
 
 Bool ValidMove(I64 from, I64 to)
 {
-  return card_faces[from] == (card_faces[to] - 1)
+  return
+    from == FACE_K && to == NULL_CARD
+    || from != NULL_CARD && to != NULL_CARD
+    && card_faces[from] == (card_faces[to] - 1)
     && SUIT_BLACK[card_suits[from]] != SUIT_BLACK[card_suits[to]];
 }
 
 U0 TryReleaseCard()
 {
-  static I64 i, j;
+  I64 i, j;
 
   GetHoveringCascade(&i, &j, sel_offset.x, sel_offset.y);
-
-  if (i == -1 || j == -1 || !ValidMove(*sel_card, piles[i][j])) return;
+  if (i == -1 || j == NULL_CARD) GetHoveringCascade(&i, &j);
+  
+  if (i == -1 || j == NULL_CARD || !ValidMove(*sel_card, piles[i][j])) return;
 
   piles[i][j + 1] = *sel_card;
-  *sel_card = -1;
-  sel_card = &NULL_CARD;
+  *sel_card = NULL_CARD;
+
+  moves++;
+}
+
+I64 GetFreeCell()
+{
+  I64 cell;
+  for (cell = 0; cell < NUM_CELLS; cell++) {
+    if (cells[cell] == NULL_CARD) return cell;
+  }
+  return -1;
+}
+
+U0 TryCellCard()
+{
+  I64 i, j, cell;
+
+  cell = GetFreeCell;
+  if (cell == -1) return;
+ 
+  GetHoveringCascade(&i, &j);
+  if (i == -1 || j == NULL_CARD) return;
+  
+  cells[cell] = piles[i][j];
+  piles[i][j] = NULL_CARD;
+
+  moves++;
 }
 
 U0 HandleSelection()
@@ -256,6 +368,8 @@ U0 HandleSelection()
   if (ms.lb) {
     if (sel_card != &NULL_CARD) return;
     TrySelectCard;
+  } else if (ms.rb) {
+    TryCellCard;
   } else {
     if (sel_card == &NULL_CARD) return;
     TryReleaseCard;
@@ -271,7 +385,7 @@ U0 Loop()
     HandleSelection;
 
     if (ScanKey(&ch)) {
-      if (ch.u8[0] == CH_ESC) return;
+      if (ch.u8[0] == CH_ESC && !ms.left_dbl) return;
     }
     
     Sleep(SLEEP_TIME);
