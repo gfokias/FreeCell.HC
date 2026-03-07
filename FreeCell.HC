@@ -14,25 +14,25 @@
 #define FACE_8 7
 #define FACE_9 8
 #define FACE_10 9
-#define FACE_K 10
+#define FACE_J 10
 #define FACE_Q 11
-#define FACE_J 12
+#define FACE_K 12
 #define NUM_FACES 13
 
-#define DECK_SIZE NUM_SUITS * NUM_FACES
+#define DECK_SIZE (NUM_SUITS * NUM_FACES)
 
 #define NUM_CASCADES 8
 #define CASCADE_LENGTH_INITIAL 7
-#define CASCADE_LENGTH NUM_FACES + 1 /* Last one is always -1 */ 
+#define CASCADE_LENGTH (NUM_FACES + 1) /* Last one is always -1 */ 
 
 #define SHUFFLES 4
 #define GCDS 5
 
 #define CARD_WIDTH 48
 #define CARD_HEIGHT 64
-#define PADDING 32
-#define PADDING_X CARD_WIDTH + 64
-#define PADDING_Y CARD_HEIGHT/2
+#define PADDING 76
+#define PADDING_X 64
+#define PADDING_Y (CARD_HEIGHT/2)
 
 #define MIN_CLICK_DISTANCE 0.1
 #define SLEEP_TIME 50
@@ -48,8 +48,11 @@ I64 *sel_card = &NULL_CARD;
 /* Contains card index */
 I64 piles[NUM_CASCADES][CASCADE_LENGTH];
 
+static U8 SUIT_BLACK[NUM_SUITS] = { TRUE, FALSE, FALSE, TRUE };
 static U8 SUIT_CHAR[NUM_SUITS] = "CDHS";
-static U8 FACE_CHAR[NUM_FACES] = "A23456789XKQJ";
+static U8 FACE_CHAR[NUM_FACES] = "A23456789XJQK";
+
+static U8 *message = "";
 
 U8 *SemiRandomOrderU8(U64 n, U8 times = 1, U8 *order = NULL)
 { /* n should be prime or 4. If gcd(I, n) == 1 then {K*I % n, K = 0,1,...} == {1,2,...,n} */
@@ -128,26 +131,28 @@ U0 DrawBackground(CDC *dc)
   }
 }
 
+U0 DrawCardOutline(CDC *dc, U64 x, U64 y)
+{
+  GrLine(dc, x, y, x, y + CARD_HEIGHT);
+  GrLine(dc, x, y, x + CARD_WIDTH, y); 
+  GrLine(dc, x + CARD_WIDTH, y, x + CARD_WIDTH, y + CARD_HEIGHT);
+  GrLine(dc, x, y + CARD_HEIGHT, x + CARD_WIDTH, y + CARD_HEIGHT);
+}
+
 U0 DrawCard(CDC *dc, U64 x, U64 y, U64 card)
 {
   static U8 buffer[3];
  
   dc->color = BLACK;
-  GrLine(dc, x, y, x, y + CARD_HEIGHT);
-  GrLine(dc, x, y, x + CARD_WIDTH, y); 
-  GrLine(dc, x + CARD_WIDTH, y, x + CARD_WIDTH, y + CARD_HEIGHT);
-  GrLine(dc, x, y + CARD_HEIGHT, x + CARD_WIDTH, y + CARD_HEIGHT); 
+  DrawCardOutline(dc, x, y);
 
   dc->color = WHITE;
   GrRect(dc, x + 1, y + 1, CARD_WIDTH - 1, CARD_HEIGHT - 1);
-	
-  switch (card_suits[card]) {
-  case SUIT_CLUB:
-  case SUIT_SPADE:
-    dc->color = BLACK; break;
-  case SUIT_HEART:
-  case SUIT_DIAMOND:
-    dc->color = RED; break;
+
+  if (SUIT_BLACK[card_suits[card]]) {
+    dc->color = BLACK;
+  } else {
+    dc->color = RED;
   }
 
   buffer[0] = SUIT_CHAR[card_suits[card]];
@@ -184,51 +189,97 @@ U0 DrawIt(CTask *task, CDC *dc)
   U8 *b;
   DrawBackground(dc);
   DrawCards(dc);
-  GrPrint(dc, 0, 0, "%d %d\n", *sel_card, ms.pos.x - PADDING - CARD_WIDTH);
+  GrPrint(dc, 0, 0, "%s", message);
 }
 
-U0 HandleHeld()
+U0 GetHoveringCascade(I64 *cascade, I64 *last_card = NULL, I64 offset_x = 0, I64 offset_y = 0)
+{ /* Last card is set to -1 if not hovering over it */
+  static I64 i, j;
+
+  /* TODO: Use math instead of for loop if too slow */
+  for (i = 0; i < NUM_CASCADES; i++) {
+    if (ms.pos.x + offset_x > PADDING + PADDING_X * i &&
+	ms.pos.x + offset_x < PADDING + PADDING_X * i + CARD_WIDTH) {
+      *cascade = i;
+      
+      if (last_card == NULL) return;
+      
+      for (j = 0; piles[i][j] != -1; j++);
+      j--;
+
+      if (ms.pos.y + offset_y < PADDING + PADDING_Y * j ||
+	  ms.pos.y + offset_y > PADDING + PADDING_Y * j + CARD_HEIGHT) {
+	*last_card = -1;
+      } else {
+	*last_card = j;
+      }
+
+      return;
+    }
+  }
+}
+
+U0 TrySelectCard()
 {
-  U64 i, j;
-  static Bool last_lb = FALSE;
+  static I64 i, j;
+
+  GetHoveringCascade(&i, &j);
+
+  if (i == -1 || j == -1) return;
   
+  sel_card = &piles[i][j];
+  sel_offset.x = PADDING + PADDING_X * i - ms.pos.x;
+  sel_offset.y = PADDING + PADDING_Y * j - ms.pos.y;
+}
+
+Bool ValidMove(I64 from, I64 to)
+{
+  return card_faces[from] == (card_faces[to] - 1)
+    && SUIT_BLACK[card_suits[from]] != SUIT_BLACK[card_suits[to]];
+}
+
+U0 TryReleaseCard()
+{
+  static I64 i, j;
+
+  GetHoveringCascade(&i, &j, sel_offset.x, sel_offset.y);
+
+  if (i == -1 || j == -1 || !ValidMove(*sel_card, piles[i][j])) return;
+
+  piles[i][j + 1] = *sel_card;
+  *sel_card = -1;
+  sel_card = &NULL_CARD;
+}
+
+U0 HandleSelection()
+{
   if (ms.lb) {
     if (sel_card != &NULL_CARD) return;
-    
-    for (i = 0; i < NUM_CASCADES; i++) {
-      if (ms.pos.x > PADDING + PADDING_X * i && ms.pos.x < PADDING + PADDING_X * i + CARD_WIDTH) {
-	for (j = 0; piles[i][j] != -1; j++);
-	j--;
-	
-	if (ms.pos.y < PADDING + PADDING_Y * j ||
-	    ms.pos.y > PADDING + PADDING_Y * j + CARD_HEIGHT) {
-	  return;
-	}
-	
-	sel_card = &piles[i][j];
-	sel_offset.x = PADDING + PADDING_X * i - ms.pos.x;
-	sel_offset.y = PADDING + PADDING_Y * j - ms.pos.y;
-	break;
-      }
-    }
+    TrySelectCard;
   } else {
     if (sel_card == &NULL_CARD) return;
+    TryReleaseCard;
     sel_card = &NULL_CARD;
   }
 }
 
-Bool Loop()
+U0 Loop()
 {
   I64 ch;
 
   while (TRUE) {
-    HandleHeld;
+    HandleSelection;
+
+    if (ScanKey(&ch)) {
+      if (ch.u8[0] == CH_ESC) return;
+    }
+    
     Sleep(SLEEP_TIME);
   }
   
 }
 
-U0 Klondike()
+U0 FreeCell()
 {
   SettingsPush;
 
@@ -245,4 +296,4 @@ U0 Klondike()
   SettingsPop;
 }
 
-Klondike;
+FreeCell;
