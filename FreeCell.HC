@@ -1,4 +1,4 @@
-#define REGISTRY "GFokias/FreeCell"
+#define REGISTRY "TempleOS/FreeCell"
 
 RegDft(REGISTRY, "9999;\n");
 
@@ -36,7 +36,7 @@ RegDft(REGISTRY, "9999;\n");
 #define NUM_CELLS 4
 #define NUM_FOUNDATIONS NUM_SUITS
 
-#define SHUFFLES 8
+#define SHUFFLES 2 * DECK_SIZE
 
 #define CARD_WIDTH 48
 #define CARD_HEIGHT 64
@@ -52,7 +52,9 @@ RegDft(REGISTRY, "9999;\n");
 #define CARD_DIST_Y (CARD_HEIGHT/4)
 
 #define NUM_MOVES 1024
-#define SLEEP_TIME 50
+#define SLEEP_TIME 100
+
+#define SOUND 32
 
 class Move
 {
@@ -81,60 +83,33 @@ F64 t0;
 
 I64 best_moves;
 
+Bool beep;
 Bool win;
 
 static U8 SUIT_BLACK[NUM_SUITS] = { TRUE, FALSE, FALSE, TRUE };
 static U8 SUIT_CHAR[NUM_SUITS] = "CDHS";
 static U8 FACE_CHAR[NUM_FACES] = "A23456789XJQK";
 
-U8 *SemiRandomOrderU8(U64 n, U64 times, U8 *order = NULL)
-{ /* n should be prime or 4. If gcd(I, n) == 1 then {K*I % n, K = 0,1,...} == {1,2,...,n} */
-  U64 i, j, step;
-
-  if (order == NULL) {
-    order = MAlloc(n);
-    if (order == NULL) return NULL;
-  }
-
-  for (i = 0; i < n; i += n) {
-    order[i] = RandU64 % n;
-    step = 1 + RandU64 % (n - 1);
-    
-    /* Only works because n can only be 4 or 13. 13 is prime. 2 + 1 = 3 % 2 = 1 */
-    if (step != 1) {
-      if (n % step == 0) step++;
-      if (n % step == 0) throw('BadNum');
-    }
-    
-    for (j = 0; j < n * times; j++) {
-      order[i + j] = (order[i + j - 1] + step) % n;
-    } 
-  }
-
-  for (i = 0; i < n * times * SHUFFLES; i++) {
-    SwapU8(&order[RandU64 % (n * times)], &order[RandU64 % (n * times)]);
-  }
-
-  return order;
-}
-
 U0 Init()
 {
   I64 i, j, card;
 
+  beep = FALSE;
   win = FALSE;
   t0 = tS;
   card = 0;
   num_moves = 0;
   num_mass_moves = 0;
   best_moves = RegExe(REGISTRY);
-  
+
+  for (i = 0; i < DECK_SIZE; i++) {
+    card_faces[i] = i % NUM_FACES;
+    card_suits[i] = i % NUM_SUITS;
+  }
+
   MemSetI64(piles, NULL_CARD, sizeof(piles)/sizeof(I64));
   MemSetI64(cells, NULL_CARD, sizeof(cells)/sizeof(I64));
   MemSetI64(foundations, NULL_CARD, sizeof(foundations)/sizeof(I64));
-  
-  SemiRandomOrderU8(NUM_SUITS, DECK_SIZE/NUM_SUITS, card_suits);
-  SemiRandomOrderU8(NUM_FACES, DECK_SIZE/NUM_FACES, card_faces);
   
   for (i = 0; i < NUM_CASCADES/2; i++) {
     for (j = 0; j < CASCADE_LENGTH_INITIAL - 1; j++) {
@@ -147,6 +122,11 @@ U0 Init()
     for (j = 0; j < CASCADE_LENGTH_INITIAL; j++) {
       piles[i][j] = card++;
     }
+  }
+
+  for (i = 0; i < SHUFFLES; i++) {
+    SwapI64(&piles[RandU64 % NUM_CASCADES][RandU64 % (CASCADE_LENGTH_INITIAL - 1)],
+	    &piles[RandU64 % NUM_CASCADES][RandU64 % (CASCADE_LENGTH_INITIAL - 1)]);
   }
 }
 
@@ -295,9 +275,7 @@ U0 DrawIt(CTask *_task, CDC *dc)
   DrawBackground(dc);
   DrawCells(dc);
   DrawFoundations(dc);
-  DrawCascadeCards(dc);
-  DrawSelectedCard(dc);
-  
+ 
   dc->color = WHITE;
   
   GrPrint(dc, FONT_WIDTH, FONT_HEIGHT,
@@ -306,11 +284,15 @@ U0 DrawIt(CTask *_task, CDC *dc)
 	  tS - t0,
 	  num_moves - num_mass_moves,
 	  best_moves);
-  GrPrint(dc, FONT_WIDTH, GR_HEIGHT - 6 * FONT_HEIGHT,
+  GrPrint(dc, FONT_WIDTH, GR_HEIGHT - 7 * FONT_HEIGHT,
 	  "Left-click to grab a card\n"
 	  "Right-click to move a card to a cell\n"
 	  "Shift + Left-click to move a card to its corresponding foundation\n"
-	  "Backspace to undo the last move");
+	  "Backspace to undo the last move\n"
+	  "No limit on supermoves, because the game is more fun that way\n");
+
+  DrawCascadeCards(dc);
+  DrawSelectedCard(dc);
 }
 
 Bool CardBoundsX(I64 x, I64 offset_x = 0, I64 width = CARD_WIDTH) {
@@ -469,6 +451,7 @@ U0 MoveCards(I64 *from, I64 *to, Bool single = TRUE)
   move->to = to;
   move->single = single;
   SwapI64(from, to);
+  beep = TRUE;
   if (!single) num_mass_moves++;
 }
 
@@ -522,7 +505,7 @@ U0 TryCascadeCard()
     /* The card snaps into place from any height, but who cares really */
     if (!ValidMove(*sel_card, NULL_CARD)) return; 
     j = -1; /* Redundant */
-  } else {
+  } else if (piles[i][0] != NULL_CARD) {
     if (!ValidMove(*sel_card, piles[i][j])) return;
   }
 
@@ -601,8 +584,14 @@ U0 Loop()
       PopUpOk("You Win!");
       return;
     }
+
+    if (beep) {
+      Snd(SOUND);
+      beep = FALSE;
+    }
     
     Sleep(SLEEP_TIME);
+    Snd;
   }  
 }
 
