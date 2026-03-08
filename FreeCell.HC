@@ -1,3 +1,7 @@
+#define REGISTRY "GFokias/FreeCell"
+
+RegDft(REGISTRY, "9999;\n");
+
 #define SELECT_TYPE_NONE -1
 #define SELECT_TYPE_SINGLE 0
 #define SELECT_TYPE_CASCADE 1
@@ -73,23 +77,28 @@ I64 foundations[NUM_FOUNDATIONS][CASCADE_LENGTH];
 Move moves[NUM_MOVES];
 I64 num_moves;
 I64 num_mass_moves; /* Cards that are moved en-masse */
+F64 t0;
+
+I64 best_moves;
+
+Bool win;
 
 static U8 SUIT_BLACK[NUM_SUITS] = { TRUE, FALSE, FALSE, TRUE };
 static U8 SUIT_CHAR[NUM_SUITS] = "CDHS";
 static U8 FACE_CHAR[NUM_FACES] = "A23456789XJQK";
 
-U8 *SemiRandomOrderU8(I64 n, U8 times = 1, U8 *order = NULL)
+U8 *SemiRandomOrderU8(U64 n, U64 times, U8 *order = NULL)
 { /* n should be prime or 4. If gcd(I, n) == 1 then {K*I % n, K = 0,1,...} == {1,2,...,n} */
-  I64 i, j, step;
+  U64 i, j, step;
 
   if (order == NULL) {
     order = MAlloc(n);
     if (order == NULL) return NULL;
   }
 
-  for (i = 0; i < times * n; i += n) {
-    order[i] = Rand % n;
-    step = Rand % (n - 1) + 1;
+  for (i = 0; i < n; i += n) {
+    order[i] = RandU64 % n;
+    step = 1 + RandU64 % (n - 1);
     
     /* Only works because n can only be 4 or 13. 13 is prime. 2 + 1 = 3 % 2 = 1 */
     if (step != 1) {
@@ -97,13 +106,14 @@ U8 *SemiRandomOrderU8(I64 n, U8 times = 1, U8 *order = NULL)
       if (n % step == 0) throw('BadNum');
     }
     
-    for (j = 1; i < n * times; i++) {
+    for (j = 0; j < n * times; j++) {
       order[i + j] = (order[i + j - 1] + step) % n;
     }
 
-    for (j = 0; i < SHUFFLES; i++) {
-      SwapU8(&order[i + Rand % n], &order[i + Rand % n]);
-    }
+  }
+  
+  for (j = 0; i < n * SHUFFLES; i++) {
+    SwapU8(&order[i + Rand % n], &order[i + Rand % n]);
   }
 
   return order;
@@ -113,9 +123,12 @@ U0 Init()
 {
   I64 i, j, card;
 
+  win = FALSE;
+  t0 = tS;
   card = 0;
   num_moves = 0;
   num_mass_moves = 0;
+  best_moves = RegExe(REGISTRY);
   
   MemSetI64(piles, NULL_CARD, sizeof(piles)/sizeof(I64));
   MemSetI64(cells, NULL_CARD, sizeof(cells)/sizeof(I64));
@@ -287,8 +300,14 @@ U0 DrawIt(CTask *_task, CDC *dc)
   DrawSelectedCard(dc);
   
   dc->color = WHITE;
-  GrPrint(dc, GR_WIDTH/TEXT_COLS, GR_HEIGHT/TEXT_ROWS, "Moves: %d\n", num_moves - num_mass_moves);
-  GrPrint(dc, GR_WIDTH/TEXT_COLS, GR_HEIGHT - 6 * GR_HEIGHT/TEXT_ROWS,
+  
+  GrPrint(dc, FONT_WIDTH, FONT_HEIGHT,
+	  "Time: %f\n"
+	  "Moves: %d - Least moves: %d",
+	  tS - t0,
+	  num_moves - num_mass_moves,
+	  best_moves);
+  GrPrint(dc, FONT_WIDTH, GR_HEIGHT - 6 * FONT_HEIGHT,
 	  "Left-click to grab a card\n"
 	  "Right-click to move a card to a cell\n"
 	  "Shift + Left-click to move a card to its corresponding foundation\n"
@@ -482,6 +501,17 @@ U0 TryMoveCardToFoundation()
   MoveCards(card, &foundations[suit][face]);
 }
 
+Bool HasWon()
+{
+  I64 i;
+  
+  for (i = 0; i < NUM_FOUNDATIONS; i++) {
+    if (foundations[i][FACE_K] == NULL_CARD) return FALSE;
+  }
+
+  return TRUE;
+}
+
 U0 TryCascadeCard()
 {
   I64 i, j, *card;
@@ -544,8 +574,8 @@ U0 HandleSelection()
       sel_type = TrySelectCard(&sel_card);
     } else {
       TryMoveCardToFoundation;
+      win = HasWon;
     }
-
   } else if (ms.rb) {
     debounce = TryCellCard;
   } else {
@@ -563,13 +593,18 @@ U0 Loop()
     HandleSelection;
     
     if (ScanKey(&ch)) {
-      if (ch.u8[0] == CH_ESC && !ms.left_dbl) return;
+      if (ch.u8[0] == CH_ESC && !ms.left_dbl && !ms.right_dbl) return;
       if (ch.u8[0] == CH_BACKSPACE) UndoMove;
+    }
+
+    if (win) {
+      best_moves = MinI64(moves, best_moves);
+      PopUpOk("You Win!");
+      return;
     }
     
     Sleep(SLEEP_TIME);
-  }
-  
+  }  
 }
 
 U0 FreeCell()
@@ -585,6 +620,8 @@ U0 FreeCell()
 
   Init;
   Loop;
+
+  RegWrite(REGISTRY, "%d;\n", best_moves); 
   
   SettingsPop;
 }
