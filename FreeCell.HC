@@ -1,3 +1,4 @@
+#define SELECT_TYPE_NONE -1
 #define SELECT_TYPE_SINGLE 0
 #define SELECT_TYPE_CASCADE 1
 
@@ -418,21 +419,29 @@ Bool GetHoveringFoundation(I64 *foundation, I64 *last_card)
   return FALSE;
 }
 
-U0 TrySelectCard()
+I64 TrySelectCard(I64 **card, Bool single = FALSE)
 {
   I64 i, j;
  
-  sel_type = SELECT_TYPE_SINGLE;
-
   /* All of these functions also set sel_offset */
   if (GetHoveringCell(&i)) {
-    sel_card = &cells[i];
-  } else if (GetHoveringFoundation(&i, &j)) {
-    sel_card = &foundations[i][j];
-  } else if (GetHoveringCascade(&i, &j,,, FALSE)) {
-    sel_card = &piles[i][j];
-    sel_type = SELECT_TYPE_CASCADE;
+    *card = &cells[i];
+    return SELECT_TYPE_SINGLE;
   }
+
+  if (GetHoveringFoundation(&i, &j)) {
+    *card = &foundations[i][j];
+    return SELECT_TYPE_SINGLE;
+  }
+
+  if (GetHoveringCascade(&i, &j,,, single)) {
+    *card = &piles[i][j];
+    return SELECT_TYPE_CASCADE;
+  }
+
+  *card = &NULL_CARD;
+
+  return SELECT_TYPE_NONE; 
 }
 
 U0 MoveCards(I64 *from, I64 *to, Bool single = TRUE)
@@ -460,21 +469,20 @@ U0 UndoMove()
 
 U0 TryMoveCardToFoundation()
 {
-  I64 i, j, card, face, suit;
+  I64 i, j, *card, face, suit;
   
-  if (!GetHoveringCascade(&i, &j)) return;
+  if (TrySelectCard(&card, TRUE) == SELECT_TYPE_NONE) return;
 
-  card = piles[i][j];
-  face = card_faces[card];
-  suit = card_suits[card];
+  face = card_faces[*card];
+  suit = card_suits[*card];
 
   if (foundations[suit][face] != NULL_CARD) return;
   if (face != FACE_A && foundations[suit][face - 1] == NULL_CARD) return;
 
-  MoveCards(&piles[i][j], &foundations[suit][face]);
+  MoveCards(card, &foundations[suit][face]);
 }
 
-U0 TryReleaseCard()
+U0 TryCascadeCard()
 {
   I64 i, j, *card;
 
@@ -509,15 +517,14 @@ I64 GetFreeCell()
 
 Bool TryCellCard()
 {
-  I64 i, j, cell;
+  I64 i, j, cell, *card;
 
   cell = GetFreeCell;
   if (cell == -1) return FALSE;
  
-  GetHoveringCascade(&i, &j);
-  if (i == -1 || j == NULL_CARD) return FALSE;
+  if (TrySelectCard(&card, TRUE) == SELECT_TYPE_NONE) return FALSE;
   
-  MoveCards(&cells[cell], &piles[i][j]);
+  MoveCards(card, &cells[cell]);
   return TRUE;
 }
 
@@ -534,7 +541,7 @@ U0 HandleSelection()
     if (sel_card != &NULL_CARD) return;
 
     if (!Bt(kbd.down_bitmap, SC_SHIFT)) {
-      TrySelectCard;
+      sel_type = TrySelectCard(&sel_card);
     } else {
       TryMoveCardToFoundation;
     }
@@ -543,7 +550,7 @@ U0 HandleSelection()
     debounce = TryCellCard;
   } else {
     if (sel_card == &NULL_CARD) return;
-    TryReleaseCard;
+    TryCascadeCard;
     sel_card = &NULL_CARD;
   }
 }
@@ -554,7 +561,7 @@ U0 Loop()
 
   while (TRUE) {
     HandleSelection;
-
+    
     if (ScanKey(&ch)) {
       if (ch.u8[0] == CH_ESC && !ms.left_dbl) return;
       if (ch.u8[0] == CH_BACKSPACE) UndoMove;
