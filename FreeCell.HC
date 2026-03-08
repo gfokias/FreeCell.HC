@@ -512,7 +512,7 @@ U0 TryCascadeCard()
   if (i == -1) GetHoveringCascade(&i, &j);
   
   if (j == NULL_CARD) {
-    if (piles[i][0] != NULL) return;
+    if (piles[i][0] != NULL_CARD) return;
     /* The card snaps into place from any height, but who cares really */
     if (!ValidMove(*sel_card, NULL_CARD)) return;
     j = -1; /* Redundant */
