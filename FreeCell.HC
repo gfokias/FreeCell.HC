@@ -1,3 +1,6 @@
+#define SELECT_TYPE_SINGLE 0
+#define SELECT_TYPE_CASCADE 1
+
 #define SUIT_CLUB 0
 #define SUIT_DIAMOND 1
 #define SUIT_HEART 2
@@ -23,7 +26,7 @@
 
 #define NUM_CASCADES 8
 #define CASCADE_LENGTH_INITIAL 7
-#define CASCADE_LENGTH (NUM_FACES + 1) /* Last one is always -1 */ 
+#define CASCADE_LENGTH (2 * NUM_FACES + 1) /* Last one is always -1 */ 
 
 #define NUM_CELLS 4
 #define NUM_FOUNDATIONS NUM_SUITS
@@ -35,16 +38,20 @@
 #define CELL_PADDING 32
 #define FOUNDATION_PADDING CELL_PADDING
 
+#define CELL_START CELL_PADDING - CARD_DIST_X
+#define FOUNDATION_START GR_WIDTH + CARD_DIST_X - FOUNDATION_PADDING - CARD_WIDTH
+
 #define CARD_PADDING_X 76
 #define CARD_PADDING_Y 128
 #define CARD_DIST_X 64
 #define CARD_DIST_Y (CARD_HEIGHT/4)
 
-#define NUM_MOVES 100
+#define NUM_MOVES 1024
 #define SLEEP_TIME 50
 
 class Move
 {
+  Bool single;
   I64 *from;
   I64 *to;
 };
@@ -56,6 +63,7 @@ static I64 NULL_CARD = -1; /* Needed for easy dereferences */
 
 CD2I64 sel_offset;
 I64 *sel_card = &NULL_CARD;
+I64 sel_type;
 
 I64 piles[NUM_CASCADES][CASCADE_LENGTH]; /* Contains card indexes */
 I64 cells[NUM_CELLS];
@@ -63,6 +71,7 @@ I64 foundations[NUM_FOUNDATIONS][CASCADE_LENGTH];
 
 Move moves[NUM_MOVES];
 I64 num_moves;
+I64 num_mass_moves; /* Cards that are moved en-masse */
 
 static U8 SUIT_BLACK[NUM_SUITS] = { TRUE, FALSE, FALSE, TRUE };
 static U8 SUIT_CHAR[NUM_SUITS] = "CDHS";
@@ -105,6 +114,7 @@ U0 Init()
 
   card = 0;
   num_moves = 0;
+  num_mass_moves = 0;
   
   MemSetI64(piles, NULL_CARD, sizeof(piles)/sizeof(I64));
   MemSetI64(cells, NULL_CARD, sizeof(cells)/sizeof(I64));
@@ -127,28 +137,25 @@ U0 Init()
   }
 }
 
-U0 DrawBackground(CDC *dc)
+Bool ValidMove(I64 from, I64 to)
 {
-  I64 x, y, i, j, max;
-
-  j = 0;
-  max = dc->width_internal * dc->height;
-
-  for (i = 0; i <= max; i++) {
-    if (i % dc->width_internal == 0) {
-      j = (j + 1) % 2;
-    }
-
-    if (i % 2 == j) {
-      dc->body[i] = GREEN;
-    } else {
-      dc->body[i] = DKGRAY;
-    }
-  }
+  return
+    card_faces[from] == FACE_K && to == NULL_CARD
+    || from != NULL_CARD && to != NULL_CARD
+    && card_faces[from] == (card_faces[to] - 1)
+    && SUIT_BLACK[card_suits[from]] != SUIT_BLACK[card_suits[to]];
 }
 
-U0 DrawCardOutline(CDC *dc, I64 x, I64 y)
+U0 DrawBackground(CDC *dc)
 {
+  /* God approved method. See $LK,"BomberGolf",A="FF:::/Demo/Games/BomberGolf.HC,ROPF_DITHER"$ */
+  dc->color = ROPF_DITHER | GREEN << 16 | DKGRAY;
+  GrRect3(dc, 0, 0, 0, dc->width, dc->height);
+} 
+
+U0 DrawCardOutline(CDC *dc, I64 x, I64 y, CColorROPU32 color = LTGRAY)
+{
+  dc->color = color;
   GrLine(dc, x, y, x, y + CARD_HEIGHT);
   GrLine(dc, x, y, x + CARD_WIDTH, y); 
   GrLine(dc, x + CARD_WIDTH, y, x + CARD_WIDTH, y + CARD_HEIGHT);
@@ -159,8 +166,7 @@ U0 DrawCard5(CDC *dc, I64 x, I64 y, I64 suit, I64 face)
 {
   U8 buffer[3];
  
-  dc->color = BLACK;
-  DrawCardOutline(dc, x, y);
+  DrawCardOutline(dc, x, y, BLACK);
   
   dc->color = WHITE;
   GrRect(dc, x + 1, y + 1, CARD_WIDTH - 1, CARD_HEIGHT - 1);
@@ -194,12 +200,17 @@ U0 DrawCascadeCards(CDC *dc)
     for (j = 0; j < CASCADE_LENGTH; j++) { 
       card = piles[i][j];
       y += CARD_DIST_Y;
-      if (card == NULL_CARD || card == *sel_card) break;
-      DrawCard4(dc, x, y, card);
+      if (card == NULL_CARD) break;
+
+      if (card != *sel_card) {
+	DrawCard4(dc, x, y, card);
+      } else {
+	DrawCardOutline(dc, x, y);
+	break;
+      }
     }
 
     if (j == 0) {
-      dc->color = LTGRAY;
       DrawCardOutline(dc, x, y);
     }
   }
@@ -207,21 +218,32 @@ U0 DrawCascadeCards(CDC *dc)
 
 U0 DrawSelectedCard(CDC *dc)
 {
+  I64 x, y, *card;
   if (sel_card == &NULL_CARD) return;
-  DrawCard4(dc, ms.pos.x + sel_offset.x, ms.pos.y + sel_offset.y, *sel_card);
+
+  x = ms.pos.x + sel_offset.x;
+  y = ms.pos.y + sel_offset.y;
+  
+  DrawCard4(dc, x, y, *sel_card);
+  if (sel_type != SELECT_TYPE_CASCADE) return;
+
+  /* Works because CASCADE_LENGTH = NUM_FACES + 1*/
+  for (card = sel_card + 1; *card != NULL_CARD; card++) {
+    y += CARD_DIST_Y;
+    DrawCard4(dc, x, y, *card);
+  }
 }
 
 U0 DrawCells(CDC *dc)
 {
   I64 x, i;
 
-  x = CELL_PADDING - CARD_DIST_X;
+  x = CELL_START;
   
   for (i = 0; i < NUM_CELLS; i++) {
     x += CARD_DIST_X;
     
     if (cells[i] == NULL_CARD || sel_card == &cells[i]) {
-      dc->color = LTGRAY;
       DrawCardOutline(dc, x, CELL_PADDING);
     } else {
       DrawCard4(dc, x, CELL_PADDING, cells[i]);
@@ -233,7 +255,7 @@ U0 DrawFoundations(CDC *dc)
 {
   I64 x, i, j;
 
-  x = GR_WIDTH - FOUNDATION_PADDING;
+  x = FOUNDATION_START;
   
   for (i = 0; i < NUM_FOUNDATIONS; i++) {
     x -= CARD_DIST_X;
@@ -248,7 +270,6 @@ U0 DrawFoundations(CDC *dc)
     }
 
     if (j == -1) {
-      dc->color = LTGRAY;
       DrawCardOutline(dc, x, FOUNDATION_PADDING);
     } else {
       DrawCard4(dc, x, FOUNDATION_PADDING, foundations[i][j]);
@@ -265,49 +286,77 @@ U0 DrawIt(CTask *_task, CDC *dc)
   DrawSelectedCard(dc);
   
   dc->color = WHITE;
-  GrPrint(dc, 16, 0, "Moves: %d\n", num_moves);
+  GrPrint(dc, GR_WIDTH/TEXT_COLS, GR_HEIGHT/TEXT_ROWS, "Moves: %d\n", num_moves - num_mass_moves);
+  GrPrint(dc, GR_WIDTH/TEXT_COLS, GR_HEIGHT - 6 * GR_HEIGHT/TEXT_ROWS,
+	  "Left-click to grab a card\n"
+	  "Right-click to move a card to a cell\n"
+	  "Shift + Left-click to move a card to its corresponding foundation\n"
+	  "Backspace to undo the last move");
 }
 
-Bool CardBoundsX(I64 x, I64 offset_x = 0) {
-  return ms.pos.x + offset_x > x && ms.pos.x + offset_x < x + CARD_WIDTH; 
+Bool CardBoundsX(I64 x, I64 offset_x = 0, I64 width = CARD_WIDTH) {
+  return ms.pos.x + offset_x > x && ms.pos.x + offset_x < x + width; 
 }
 
-Bool CardBoundsY(I64 y, I64 offset_y = 0) {
-  return ms.pos.y + offset_y > y && ms.pos.y + offset_y < y + CARD_HEIGHT;
+Bool CardBoundsY(I64 y, I64 offset_y = 0, I64 height = CARD_HEIGHT) {
+  return ms.pos.y + offset_y > y && ms.pos.y + offset_y < y + height;
 }
 
-Bool GetHoveringCascade(I64 *cascade, I64 *last_card, I64 offset_x = 0, I64 offset_y = 0)
+Bool GetHoveringCascade(I64 *cascade, I64 *card, I64 offset_x = 0,
+			I64 offset_y = 0, Bool single_card = TRUE)
 { /* Returns TRUE when hovering over a card */
-  I64 i, j;
+  I64 i, j, x, y;
 
   /* TODO: Use math instead of for loop if too slow */
   for (i = 0; i < NUM_CASCADES; i++) {
-    if (CardBoundsX(CARD_PADDING_X + CARD_DIST_X * i, offset_x)) {
+    x = CARD_PADDING_X + CARD_DIST_X * i;
+    
+    if (CardBoundsX(x, offset_x)) {
       *cascade = i;
       
       for (j = 0; piles[i][j] != NULL_CARD; j++);
       
       if (j == 0) {
-	*last_card = NULL_CARD;
+	*card = NULL_CARD;
 	return FALSE;
       }
 
       j--;
+      y = CARD_PADDING_Y + CARD_DIST_Y * j;
+      
+      /* Single selection */
+      if (CardBoundsY(y, offset_y)) {
+	*card = j;
 
-      if (CardBoundsY(CARD_PADDING_Y + CARD_DIST_Y * j, offset_y)) {
-	*last_card = j;
-
-	sel_offset.x = CARD_PADDING_X + CARD_DIST_X * i - ms.pos.x;
-	sel_offset.y = CARD_PADDING_Y + CARD_DIST_Y * j - ms.pos.y;
+	sel_offset.x = x - ms.pos.x;
+	sel_offset.y = y - ms.pos.y;
 	
 	return TRUE;
       }
+
+      if (single_card == FALSE) {
+	/* Multiple selection */
+	for (j--; j >= 0; j--) {
+	  if (!ValidMove(piles[i][j + 1], piles[i][j])) break;
+
+	  y -= CARD_DIST_Y; 
+
+	  if (CardBoundsY(y, offset_y, CARD_DIST_Y)) {
+	    *card = j;
+
+	    sel_offset.x = x - ms.pos.x;
+	    sel_offset.y = y - ms.pos.y;
+
+	    return TRUE;
+	  }
+	}
+      }
       
-      *last_card = NULL_CARD;
+      *card = NULL_CARD;
       return FALSE;
     }
   }
-
+  
   *cascade = -1;
   return FALSE;
 }
@@ -320,7 +369,7 @@ Bool GetHoveringCell(I64 *cell)
     return FALSE;
   }
   
-  x = CELL_PADDING - CARD_DIST_X;
+  x = CELL_START;
   
   for (i = 0; i < NUM_CELLS; i++) {
     x += CARD_DIST_X;
@@ -328,7 +377,7 @@ Bool GetHoveringCell(I64 *cell)
     if (CardBoundsX(x)) {
       *cell = i;
 
-      sel_offset.x = CELL_PADDING + CARD_DIST_X * i - ms.pos.x;
+      sel_offset.x = x - ms.pos.x;
       sel_offset.y = CELL_PADDING - ms.pos.y;
 
       return TRUE;
@@ -338,29 +387,74 @@ Bool GetHoveringCell(I64 *cell)
   return FALSE;
 }
 
-U0 MoveCards(I64 *from, I64 *to)
+Bool GetHoveringFoundation(I64 *foundation, I64 *last_card)
 {
-  Move *move = &moves[num_moves++ % NUM_MOVES];
-  move->from = from;
-  move->to = to;
-  SwapI64(from, to);
-}
+  I64 i, j, x;
 
-U0 UndoMove()
-{
-  if (num_moves == 0) return;
-  Move *move = &moves[--num_moves % NUM_MOVES];
-  SwapI64(move->from, move->to);
+  if (!CardBoundsY(FOUNDATION_PADDING)) {
+    return FALSE;
+  }
+  
+  x = FOUNDATION_START;
+
+  for (i = 0; i < NUM_FOUNDATIONS; i++) {
+    x -= CARD_DIST_X;
+
+    if (CardBoundsX(x)) {
+      *foundation = i;
+
+      for (j = 0; foundations[i][j] != NULL_CARD; j++); 
+      if (j == 0) return FALSE;
+
+      *last_card = j - 1;
+ 
+      sel_offset.x = x - ms.pos.x;
+      sel_offset.y = FOUNDATION_PADDING - ms.pos.y;
+
+      return TRUE;
+    }
+  }
+
+  return FALSE;
 }
 
 U0 TrySelectCard()
 {
   I64 i, j;
+ 
+  sel_type = SELECT_TYPE_SINGLE;
 
-  if (GetHoveringCascade(&i, &j)) {
-    sel_card = &piles[i][j];
-  } else if (GetHoveringCell(&i)) {
+  /* All of these functions also set sel_offset */
+  if (GetHoveringCell(&i)) {
     sel_card = &cells[i];
+  } else if (GetHoveringFoundation(&i, &j)) {
+    sel_card = &foundations[i][j];
+  } else if (GetHoveringCascade(&i, &j,,, FALSE)) {
+    sel_card = &piles[i][j];
+    sel_type = SELECT_TYPE_CASCADE;
+  }
+}
+
+U0 MoveCards(I64 *from, I64 *to, Bool single = TRUE)
+{
+  Move *move = &moves[num_moves++ % NUM_MOVES];
+  move->from = from;
+  move->to = to;
+  move->single = single;
+  SwapI64(from, to);
+  if (!single) num_mass_moves++;
+}
+
+U0 UndoMove()
+{
+  if (num_moves == 0) return;
+
+  Move *move = &moves[--num_moves % NUM_MOVES];
+  SwapI64(move->from, move->to);
+
+  if (!move->single) {
+    num_mass_moves--;
+    UndoMove;
   }
 }
 
@@ -380,18 +474,9 @@ U0 TryMoveCardToFoundation()
   MoveCards(&piles[i][j], &foundations[suit][face]);
 }
 
-Bool ValidMove(I64 from, I64 to)
-{
-  return
-    card_faces[from] == FACE_K && to == NULL_CARD
-    || from != NULL_CARD && to != NULL_CARD
-    && card_faces[from] == (card_faces[to] - 1)
-    && SUIT_BLACK[card_suits[from]] != SUIT_BLACK[card_suits[to]];
-}
-
 U0 TryReleaseCard()
 {
-  I64 i, j;
+  I64 i, j, *card;
 
   GetHoveringCascade(&i, &j, sel_offset.x, sel_offset.y);
   if (i == -1) GetHoveringCascade(&i, &j);
@@ -404,7 +489,13 @@ U0 TryReleaseCard()
     if (!ValidMove(*sel_card, piles[i][j])) return;
   }
 
-  MoveCards(&piles[i][j + 1], sel_card);
+  MoveCards(&piles[i][++j], sel_card);
+
+  if (sel_type != SELECT_TYPE_CASCADE) return;
+
+  for (card = sel_card + 1; *card != NULL_CARD; card++) {
+    MoveCards(&piles[i][++j], card, FALSE);
+  }
 }
 
 I64 GetFreeCell()
@@ -416,21 +507,29 @@ I64 GetFreeCell()
   return -1;
 }
 
-U0 TryCellCard()
+Bool TryCellCard()
 {
   I64 i, j, cell;
 
   cell = GetFreeCell;
-  if (cell == -1) return;
+  if (cell == -1) return FALSE;
  
   GetHoveringCascade(&i, &j);
-  if (i == -1 || j == NULL_CARD) return;
+  if (i == -1 || j == NULL_CARD) return FALSE;
   
   MoveCards(&cells[cell], &piles[i][j]);
+  return TRUE;
 }
 
 U0 HandleSelection()
 {
+  static Bool debounce;
+
+  if (debounce) {
+    debounce = ms.lb || ms.rb;
+    return;
+  }
+  
   if (ms.lb) {
     if (sel_card != &NULL_CARD) return;
 
@@ -439,9 +538,9 @@ U0 HandleSelection()
     } else {
       TryMoveCardToFoundation;
     }
+
   } else if (ms.rb) {
-    if (ms_last.rb) return;
-    TryCellCard;
+    debounce = TryCellCard;
   } else {
     if (sel_card == &NULL_CARD) return;
     TryReleaseCard;
