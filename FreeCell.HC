@@ -36,7 +36,7 @@ RegDft(REGISTRY, "9999;\n");
 #define NUM_CELLS 4
 #define NUM_FOUNDATIONS NUM_SUITS
 
-#define SHUFFLES 4
+#define SHUFFLES 8
 
 #define CARD_WIDTH 48
 #define CARD_HEIGHT 64
@@ -108,12 +108,11 @@ U8 *SemiRandomOrderU8(U64 n, U64 times, U8 *order = NULL)
     
     for (j = 0; j < n * times; j++) {
       order[i + j] = (order[i + j - 1] + step) % n;
-    }
-
+    } 
   }
-  
-  for (j = 0; i < n * SHUFFLES; i++) {
-    SwapU8(&order[i + Rand % n], &order[i + Rand % n]);
+
+  for (i = 0; i < n * times * SHUFFLES; i++) {
+    SwapU8(&order[RandU64 % (n * times)], &order[RandU64 % (n * times)]);
   }
 
   return order;
