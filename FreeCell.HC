@@ -517,7 +517,7 @@ U0 TryCascadeCard()
     if (!ValidMove(*sel_card, NULL_CARD)) return;
     j = -1; /* Redundant */
   } else {
-    if (!ValidMove(*sel_card, piles[i][j])) return;
+    if (i == -1 || !ValidMove(*sel_card, piles[i][j])) return;
   }
 
   MoveCards(&piles[i][++j], sel_card);
