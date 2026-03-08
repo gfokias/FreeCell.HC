@@ -591,7 +591,7 @@ U0 Loop()
     }
 
     if (win) {
-      best_moves = MinI64(moves, best_moves);
+      best_moves = MinI64(num_moves - num_mass_moves, best_moves);
       PopUpOk("You Win!");
       return;
     }
