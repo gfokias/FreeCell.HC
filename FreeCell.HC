@@ -1,3 +1,4 @@
+$SP,"<1>",BI=1$ $SP,"<2>",BI=2$ $SP,"<3>",BI=3$ $SP,"<4>",BI=4$
 #define REGISTRY "TempleOS/FreeCell"
 
 RegDft(REGISTRY, "9999;\n");
@@ -87,6 +88,8 @@ Bool beep;
 Bool win;
 
 static U8 SUIT_BLACK[NUM_SUITS] = { TRUE, FALSE, FALSE, TRUE };
+static U8 *SUIT_SPRITE[NUM_SUITS] = { $IB,"<1>",BI=1$, $IB,"<2>",BI=2$,
+				      $IB,"<3>",BI=3$, $IB,"<4>",BI=4$ };
 static U8 SUIT_CHAR[NUM_SUITS] = "CDHS";
 static U8 FACE_CHAR[NUM_FACES] = "A23456789XJQK";
 
@@ -128,6 +131,11 @@ U0 Init()
     SwapI64(&piles[RandU64 % NUM_CASCADES][RandU64 % (CASCADE_LENGTH_INITIAL - 1)],
 	    &piles[RandU64 % NUM_CASCADES][RandU64 % (CASCADE_LENGTH_INITIAL - 1)]);
   }
+
+  for (i = NUM_CASCADES/2; i < NUM_CASCADES; i++) {
+    SwapI64(&piles[i][CASCADE_LENGTH_INITIAL - 1],
+	    &piles[RandU64 % NUM_CASCADES][RandU64 % (CASCADE_LENGTH_INITIAL - 1)]);
+  } 
 }
 
 Bool ValidMove(I64 from, I64 to)
@@ -155,31 +163,33 @@ U0 DrawCardOutline(CDC *dc, I64 x, I64 y, CColorROPU32 color = LTGRAY)
   GrLine(dc, x, y + CARD_HEIGHT, x + CARD_WIDTH, y + CARD_HEIGHT);
 }
 
-U0 DrawCard5(CDC *dc, I64 x, I64 y, I64 suit, I64 face)
+U0 DrawCard5(CDC *dc, I64 x, I64 y, I64 suit, I64 face, Bool draw_sprite)
 {
+  U8 *sprite;
   U8 buffer[3];
- 
-  DrawCardOutline(dc, x, y, BLACK);
   
   dc->color = WHITE;
   GrRect(dc, x + 1, y + 1, CARD_WIDTH - 1, CARD_HEIGHT - 1);
 
+  if (draw_sprite) Sprite3(dc, x, y, 0, SUIT_SPRITE[suit]);
+  DrawCardOutline(dc, x, y, BLACK);
+  
+  buffer[0] = SUIT_CHAR[suit];
+  buffer[1] = FACE_CHAR[face];
+  buffer[2] = '\0';
+   
   if (SUIT_BLACK[suit]) {
     dc->color = BLACK;
   } else {
     dc->color = RED;
   }
 
-  buffer[0] = SUIT_CHAR[suit];
-  buffer[1] = FACE_CHAR[face];
-  buffer[2] = '\0';
-  
   GrTextBox3(dc, x + 2, y + 2, 0, buffer);
 }
 
-U0 DrawCard4(CDC *dc, I64 x, I64 y, I64 card)
+U0 DrawCard4(CDC *dc, I64 x, I64 y, I64 card, Bool draw_sprite = TRUE)
 {
-  DrawCard5(dc, x, y, card_suits[card], card_faces[card]);
+  DrawCard5(dc, x, y, card_suits[card], card_faces[card], draw_sprite);
 }
 
 U0 DrawCascadeCards(CDC *dc)
@@ -196,7 +206,7 @@ U0 DrawCascadeCards(CDC *dc)
       if (card == NULL_CARD) break;
 
       if (card != *sel_card) {
-	DrawCard4(dc, x, y, card);
+	DrawCard4(dc, x, y, card, piles[i][j + 1] == NULL_CARD || sel_card == &piles[i][j + 1]);
       } else {
 	DrawCardOutline(dc, x, y);
 	break;
@@ -501,11 +511,12 @@ U0 TryCascadeCard()
   GetHoveringCascade(&i, &j, sel_offset.x, sel_offset.y);
   if (i == -1) GetHoveringCascade(&i, &j);
   
-  if (j == NULL_CARD && piles[i][0] == NULL_CARD) {
+  if (j == NULL_CARD) {
+    if (piles[i][0] != NULL) return;
     /* The card snaps into place from any height, but who cares really */
-    if (!ValidMove(*sel_card, NULL_CARD)) return; 
+    if (!ValidMove(*sel_card, NULL_CARD)) return;
     j = -1; /* Redundant */
-  } else if (piles[i][0] != NULL_CARD) {
+  } else {
     if (!ValidMove(*sel_card, piles[i][j])) return;
   }
 
