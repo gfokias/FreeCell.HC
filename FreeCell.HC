@@ -385,7 +385,7 @@ Bool GetHoveringCell(I64 *cell)
   for (i = 0; i < NUM_CELLS; i++) {
     x += CARD_DIST_X;
 
-    if (CardBoundsX(x)) {
+    if (CardBoundsX(x) && cells[i] != NULL_CARD) {
       *cell = i;
 
       sel_offset.x = x - ms.pos.x;
